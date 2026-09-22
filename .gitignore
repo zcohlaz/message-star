@@ -1,0 +1,35 @@
+# IDE
+*.iml
+.idea/
+
+# Gradle and Android build output
+.gradle/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Local machine configuration
+local.properties
+keystore.properties
+signing.properties
+.env
+.env.*
+!.env.example
+
+# Signing credentials and private keys
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+
+# Generated packages, logs, and temporary files
+*.apk
+*.aab
+*.log
+*.tmp
+
+# Operating system files
+.DS_Store
+Thumbs.db
