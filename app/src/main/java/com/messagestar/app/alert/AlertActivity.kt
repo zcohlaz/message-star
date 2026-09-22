@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -52,6 +53,14 @@ class AlertActivity : ComponentActivity() {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
         }
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    // 报警期间忽略返回操作，只允许关闭按钮或音量键停止报警。
+                }
+            }
+        )
         snapshot = AlertStateStore.snapshot(this)
         setContent {
             MessageStarTheme(darkTheme = true) {
@@ -93,12 +102,14 @@ class AlertActivity : ComponentActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            closeAlert()
-            return true
+        return when (keyCode) {
+            KeyEvent.KEYCODE_VOLUME_UP,
+            KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                closeAlert()
+                true
+            }
+            else -> super.onKeyDown(keyCode, event)
         }
-        if (keyCode != KeyEvent.KEYCODE_BACK) closeAlert()
-        return super.onKeyDown(keyCode, event)
     }
 
     private fun closeAlert() {
