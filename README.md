@@ -31,7 +31,7 @@ app/build.gradle.kts       Android 模块构建配置
 gradle/wrapper/            Gradle Wrapper
 ```
 
-详细设计资料保留在仓库根目录，包括 PRD、Android 15 技术方案和真机调试指南。
+真机调试说明保留在仓库根目录的 `真机调试指南.md` 中。
 
 ## 环境要求
 
