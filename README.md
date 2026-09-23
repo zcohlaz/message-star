@@ -17,7 +17,7 @@
 
 - Kotlin 1.9.25、Java 17
 - Android SDK 35（最低 SDK 26）
-- Jetpack Compose、Material 3
+- Jetpack Compose、Material 3、Navigation Compose
 - AndroidX Lifecycle、DataStore
 - Kotlin Coroutines、Kotlin Serialization
 - Gradle 8.9、Android Gradle Plugin 8.7.3
@@ -90,6 +90,17 @@ Android SDK 的本机路径由 `local.properties` 管理，该文件不会提交
 
 `keystore.properties`、JKS、keystore、P12、PEM 和私钥均已被 `.gitignore` 排除。不要把真实密码或密钥写入 README、CI 文件或提交历史。
 
+## 基础交互验收
+
+在启用手势导航的真机上验证以下路径；顶部返回按钮与侧滑返回应得到相同结果：
+
+1. 首页 → 设置 → 权限检查 → 返回：依次回到设置、首页；首页返回才退出 App。
+2. 首页 → 权限检查 → 返回：回到首页，不退出 App。
+3. 新建或编辑规则后修改字段，侧滑返回/点“取消”：弹出“放弃修改”确认；继续编辑时草稿仍在。
+4. 编辑中旋转屏幕、切到后台再返回：当前页面、弹窗、已输入字段和规则列表滚动位置保持。
+5. 从权限检查跳到系统设置并返回：短信、通知、悬浮窗等状态重新读取。
+6. 保存、切换或删除规则：出现操作反馈；删除后点“撤销”可恢复原规则及顺序。
+7. 在系统设置中强制结束 App 后重新打开：已保存的规则仍在。编辑草稿的恢复依赖系统是否保留任务状态，不承诺跨强制停止恢复。
 ## 真机验证重点
 
 使用真实 SIM 验证锁屏、最近任务划掉、重启、连续短信、蓝牙和通话场景。Android 15 与厂商系统可能将全屏提醒降级为 Heads-up，最终可靠性应以目标设备实测为准。

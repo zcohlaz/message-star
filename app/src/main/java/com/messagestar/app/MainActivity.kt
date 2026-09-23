@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -49,15 +50,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -68,9 +74,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
 import com.messagestar.app.alert.AlertCoordinator
 import com.messagestar.app.data.Rule
 import com.messagestar.app.data.RuleType
@@ -78,16 +89,19 @@ import com.messagestar.app.data.SettingsRepository
 import com.messagestar.app.permissions.DeviceSettingsHelper
 import com.messagestar.app.rules.RuleEngine
 import com.messagestar.app.ui.MessageStarTheme
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 
-private enum class AppScreen { HOME, SETTINGS, PERMISSIONS }
+private object AppScreen {
+    const val HOME = "home"
+    const val SETTINGS = "settings"
+    const val PERMISSIONS = "permissions"
+}
 
 class MainActivity : ComponentActivity() {
     private lateinit var repository: SettingsRepository
-    private val activityScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -100,7 +114,7 @@ class MainActivity : ComponentActivity() {
     }
 
     fun save(block: suspend SettingsRepository.() -> Unit) {
-        activityScope.launch { repository.block() }
+        lifecycleScope.launch { repository.block() }
     }
 }
 
@@ -111,39 +125,73 @@ private fun MessageStarApp(repository: SettingsRepository, activity: MainActivit
     val masterEnabled by repository.masterEnabled.collectAsStateWithLifecycle(initialValue = true)
     val vibrationEnabled by repository.vibrationEnabled.collectAsStateWithLifecycle(initialValue = true)
     val ringtoneUri by repository.ringtoneUri.collectAsStateWithLifecycle(initialValue = null)
-    var screen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
-    var editingRule by remember { mutableStateOf<Rule?>(null) }
-    var showTypePicker by remember { mutableStateOf(false) }
-    var pendingDelete by remember { mutableStateOf<Rule?>(null) }
-    val saveRules: (List<Rule>) -> Unit = { next -> activity.save { saveRules(next) } }
+    val navController = rememberNavController()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    var permissionRevision by remember { mutableIntStateOf(0) }
+    var editingRuleJson by rememberSaveable { mutableStateOf<String?>(null) }
+    var showTypePicker by rememberSaveable { mutableStateOf(false) }
+    var pendingDeleteJson by rememberSaveable { mutableStateOf<String?>(null) }
 
-    when (screen) {
-        AppScreen.HOME -> Scaffold(
-            topBar = { TopAppBar(title = { Text("短信强提醒", fontWeight = FontWeight.Bold) }) }
-        ) { padding ->
-            HomeScreen(
-                modifier = Modifier.padding(padding),
-                rules = rules,
-                masterEnabled = masterEnabled,
-                onMasterChanged = { activity.save { setMasterEnabled(it) } },
-                onRuleChanged = { changed -> saveRules(rules.map { if (it.id == changed.id) changed else it }) },
-                onEdit = { editingRule = it },
-                onDelete = { pendingDelete = it },
-                onAdd = { if (rules.size < 10) showTypePicker = true },
-                onSettings = { screen = AppScreen.SETTINGS },
-                onPermission = { screen = AppScreen.PERMISSIONS }
-            )
+    DisposableEffect(activity) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) permissionRevision++
         }
-        AppScreen.SETTINGS -> SettingsScreen(
-            vibrationEnabled = vibrationEnabled,
-            ringtoneUri = ringtoneUri,
-            onBack = { screen = AppScreen.HOME },
-            onVibrationChanged = { activity.save { setVibrationEnabled(it) } },
-            onRingtoneSelected = { activity.save { setRingtoneUri(it?.toString()) } },
-            onPermission = { screen = AppScreen.PERMISSIONS },
-            onTest = { AlertCoordinator.trigger(activity, "测试短信", testMode = true) }
-        )
-        AppScreen.PERMISSIONS -> PermissionScreen(onBack = { screen = AppScreen.HOME })
+        activity.lifecycle.addObserver(observer)
+        onDispose { activity.lifecycle.removeObserver(observer) }
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        NavHost(navController = navController, startDestination = AppScreen.HOME) {
+            composable(AppScreen.HOME) {
+                Scaffold(topBar = { TopAppBar(title = { Text("短信强提醒", fontWeight = FontWeight.Bold) }) }) { padding ->
+                    HomeScreen(
+                        modifier = Modifier.padding(padding),
+                        rules = rules,
+                        masterEnabled = masterEnabled,
+                        permissionRevision = permissionRevision,
+                        onPermissionResult = { permissionRevision++ },
+                        onMasterChanged = { activity.save { setMasterEnabled(it) }; scope.launch { snackbarHostState.showSnackbar(if (it) "强提醒已开启" else "强提醒已暂停") } },
+                        onRuleChanged = { changed ->
+                            scope.launch {
+                                repository.saveRules(repository.currentRules().map { if (it.id == changed.id) changed else it })
+                                snackbarHostState.showSnackbar(if (changed.enabled) "规则已开启" else "规则已暂停")
+                            }
+                        },
+                        onEdit = { editingRuleJson = Json.encodeToString(it) },
+                        onDelete = { pendingDeleteJson = Json.encodeToString(it) },
+                        onAdd = { if (rules.size < 10) showTypePicker = true },
+                        onSettings = { navController.navigate(AppScreen.SETTINGS) },
+                        onPermission = { navController.navigate(AppScreen.PERMISSIONS) }
+                    )
+                }
+            }
+            composable(AppScreen.SETTINGS) {
+                SettingsScreen(
+                    vibrationEnabled = vibrationEnabled,
+                    ringtoneUri = ringtoneUri,
+                    onBack = { navController.popBackStack() },
+                    onVibrationChanged = { value ->
+                        activity.save { setVibrationEnabled(value) }
+                        scope.launch { snackbarHostState.showSnackbar(if (value) "振动已开启" else "振动已关闭") }
+                    },
+                    onRingtoneSelected = { uri ->
+                        activity.save { setRingtoneUri(uri?.toString()) }
+                        scope.launch { snackbarHostState.showSnackbar("铃声已更新") }
+                    },
+                    onPermission = { navController.navigate(AppScreen.PERMISSIONS) },
+                    onTest = { AlertCoordinator.trigger(activity, "测试短信", testMode = true) }
+                )
+            }
+            composable(AppScreen.PERMISSIONS) {
+                PermissionScreen(
+                    onBack = { navController.popBackStack() },
+                    permissionRevision = permissionRevision,
+                    onPermissionResult = { permissionRevision++ }
+                )
+            }
+        }
+        SnackbarHost(hostState = snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter))
     }
 
     if (showTypePicker) {
@@ -152,44 +200,72 @@ private fun MessageStarApp(repository: SettingsRepository, activity: MainActivit
             title = { Text("选择规则类型") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(onClick = { showTypePicker = false; editingRule = Rule(java.util.UUID.randomUUID().toString(), RuleType.PHONE) }, modifier = Modifier.fillMaxWidth()) { Text("手机号") }
-                    OutlinedButton(onClick = { showTypePicker = false; editingRule = Rule(java.util.UUID.randomUUID().toString(), RuleType.PLATFORM) }, modifier = Modifier.fillMaxWidth()) { Text("平台短信") }
+                    OutlinedButton(onClick = {
+                        showTypePicker = false
+                        editingRuleJson = Json.encodeToString(Rule(java.util.UUID.randomUUID().toString(), RuleType.PHONE))
+                    }, modifier = Modifier.fillMaxWidth()) { Text("手机号") }
+                    OutlinedButton(onClick = {
+                        showTypePicker = false
+                        editingRuleJson = Json.encodeToString(Rule(java.util.UUID.randomUUID().toString(), RuleType.PLATFORM))
+                    }, modifier = Modifier.fillMaxWidth()) { Text("平台短信") }
                 }
             },
             confirmButton = {}
         )
     }
 
-    editingRule?.let { original ->
+    editingRuleJson?.let { encoded ->
+        val original = remember(encoded) { Json.decodeFromString<Rule>(encoded) }
         RuleEditorDialog(
             initial = original,
-            onDismiss = { editingRule = null },
+            existingRules = rules,
+            onDismiss = { editingRuleJson = null },
             onSave = { saved ->
-                val next = if (rules.any { it.id == saved.id }) rules.map { if (it.id == saved.id) saved else it } else rules + saved
-                saveRules(next)
-                editingRule = null
+                scope.launch {
+                    val current = repository.currentRules()
+                    val next = if (current.any { it.id == saved.id }) current.map { if (it.id == saved.id) saved else it } else current + saved
+                    repository.saveRules(next)
+                    editingRuleJson = null
+                    snackbarHostState.showSnackbar("规则已保存")
+                }
             }
         )
     }
 
-    pendingDelete?.let { target ->
+    pendingDeleteJson?.let { encoded ->
+        val target = remember(encoded) { Json.decodeFromString<Rule>(encoded) }
         AlertDialog(
-            onDismissRequest = { pendingDelete = null },
+            onDismissRequest = { pendingDeleteJson = null },
             title = { Text("确定删除该监听规则？") },
             text = { Text(target.title) },
-            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
+            dismissButton = { TextButton(onClick = { pendingDeleteJson = null }) { Text("取消") } },
             confirmButton = {
-                TextButton(onClick = { saveRules(rules.filterNot { it.id == target.id }); pendingDelete = null }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+                TextButton(onClick = {
+                    pendingDeleteJson = null
+                    scope.launch {
+                        val before = repository.currentRules()
+                        val position = before.indexOfFirst { it.id == target.id }
+                        if (position < 0) return@launch
+                        repository.saveRules(before.filterNot { it.id == target.id })
+                        if (snackbarHostState.showSnackbar("规则已删除", actionLabel = "撤销") == SnackbarResult.ActionPerformed) {
+                            val current = repository.currentRules()
+                            if (current.none { it.id == target.id }) {
+                                repository.saveRules(current.toMutableList().apply { add(position.coerceAtMost(size), target) })
+                            }
+                        }
+                    }
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
             }
         )
     }
 }
-
 @Composable
 private fun HomeScreen(
     modifier: Modifier,
     rules: List<Rule>,
     masterEnabled: Boolean,
+    permissionRevision: Int,
+    onPermissionResult: () -> Unit,
     onMasterChanged: (Boolean) -> Unit,
     onRuleChanged: (Rule) -> Unit,
     onEdit: (Rule) -> Unit,
@@ -199,13 +275,14 @@ private fun HomeScreen(
     onPermission: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val smsGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED
-    val notificationGranted = Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-    val fullScreenGranted = Build.VERSION.SDK_INT < 34 || context.getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent()
-    val overlayGranted = Settings.canDrawOverlays(context)
+    val smsGranted = remember(permissionRevision) { ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED }
+    val notificationGranted = remember(permissionRevision) { Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED }
+    val fullScreenGranted = remember(permissionRevision) { Build.VERSION.SDK_INT < 34 || context.getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent() }
+    val overlayGranted = remember(permissionRevision) { Settings.canDrawOverlays(context) }
     val healthy = smsGranted && notificationGranted && (fullScreenGranted || overlayGranted)
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { onPermissionResult() }
 
+    val listState = rememberLazyListState()
     Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(12.dp))
         Card(colors = CardDefaults.cardColors(containerColor = if (healthy) Color(0xFFE9F8EE) else Color(0xFFFFF0EF)), modifier = Modifier.fillMaxWidth().clickable { onPermission() }) {
@@ -243,7 +320,7 @@ private fun HomeScreen(
                 }
             }
         } else {
-            LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(state = listState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(rules, key = { it.id }) { rule ->
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Row(Modifier.padding(start = 16.dp, end = 4.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -313,16 +390,16 @@ private fun SettingsScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PermissionScreen(onBack: () -> Unit) {
+private fun PermissionScreen(onBack: () -> Unit, permissionRevision: Int, onPermissionResult: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val packageName = context.packageName
-    val sms = ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED
-    val notifications = Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-    val fullScreen = Build.VERSION.SDK_INT < 34 || context.getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent()
-    val overlay = Settings.canDrawOverlays(context)
-    val power = (context.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName) == true)
+    val sms = remember(permissionRevision) { ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED }
+    val notifications = remember(permissionRevision) { Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED }
+    val fullScreen = remember(permissionRevision) { Build.VERSION.SDK_INT < 34 || context.getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent() }
+    val overlay = remember(permissionRevision) { Settings.canDrawOverlays(context) }
+    val power = remember(permissionRevision) { context.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName) == true }
     val manufacturer = DeviceSettingsHelper.manufacturerName()
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { onPermissionResult() }
     Scaffold(topBar = { TopAppBar(title = { Text("权限检查") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "返回") } }) }) { padding ->
         LazyColumn(Modifier.padding(padding).fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             item { Text("为了尽可能可靠地提醒，请检查以下项目。vivo 的菜单名称可能随 OriginOS 版本变化。", style = MaterialTheme.typography.bodyMedium) }
@@ -356,17 +433,33 @@ private fun PermissionRow(label: String, granted: Boolean, statusText: String? =
 }
 
 @Composable
-private fun RuleEditorDialog(initial: Rule, onDismiss: () -> Unit, onSave: (Rule) -> Unit) {
-    var phone by remember(initial.id) { mutableStateOf(initial.phoneNumber) }
-    var name by remember(initial.id) { mutableStateOf(initial.name) }
-    var keywordsText by remember(initial.id) { mutableStateOf(initial.keywords.joinToString("\n")) }
-    var testBody by remember(initial.id) { mutableStateOf("") }
-    var error by remember(initial.id) { mutableStateOf<String?>(null) }
-    var testResult by remember(initial.id) { mutableStateOf<String?>(null) }
+private fun RuleEditorDialog(
+    initial: Rule,
+    existingRules: List<Rule>,
+    onDismiss: () -> Unit,
+    onSave: (Rule) -> Unit
+) {
+    var phone by rememberSaveable(initial.id) { mutableStateOf(initial.phoneNumber) }
+    var name by rememberSaveable(initial.id) { mutableStateOf(initial.name) }
+    var keywordsText by rememberSaveable(initial.id) { mutableStateOf(initial.keywords.joinToString("\n")) }
+    var testBody by rememberSaveable(initial.id) { mutableStateOf("") }
+    var error by rememberSaveable(initial.id) { mutableStateOf<String?>(null) }
+    var testResult by rememberSaveable(initial.id) { mutableStateOf<String?>(null) }
+    var showDiscardConfirmation by rememberSaveable(initial.id) { mutableStateOf(false) }
     val platform = initial.type == RuleType.PLATFORM
-    val keywords = keywordsText.lines().map(String::trim).filter(String::isNotEmpty).take(5)
+    val enteredKeywords = keywordsText.lines().map(String::trim).filter(String::isNotEmpty)
+    val keywords = enteredKeywords.take(5)
+    val hasChanges = if (platform) {
+        name != initial.name || keywordsText != initial.keywords.joinToString("\n")
+    } else {
+        phone != initial.phoneNumber
+    }
+    val requestDismiss = {
+        if (hasChanges) showDiscardConfirmation = true else onDismiss()
+    }
+
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = requestDismiss,
         title = { Text(if (platform) "平台短信规则" else "手机号规则") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -376,7 +469,10 @@ private fun RuleEditorDialog(initial: Rule, onDismiss: () -> Unit, onSave: (Rule
                     Text("建议配置 2～3 个稳定关键词，所有关键词都匹配才会触发。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     HorizontalDivider()
                     OutlinedTextField(value = testBody, onValueChange = { testBody = it }, label = { Text("输入测试短信正文") }, minLines = 2, modifier = Modifier.fillMaxWidth())
-                    OutlinedButton(onClick = { val result = RuleEngine.test(initial.copy(keywords = keywords), testBody); testResult = if (result.matched) "✓ 会触发强提醒（命中 ${keywords.size}/${keywords.size} 个关键词）" else "✗ 不会触发：未匹配 ${result.missingKeywords.joinToString("、")}" }, enabled = testBody.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text("测试规则") }
+                    OutlinedButton(onClick = {
+                        val result = RuleEngine.test(initial.copy(keywords = keywords), testBody)
+                        testResult = if (result.matched) "✓ 会触发强提醒（命中 ${keywords.size}/${keywords.size} 个关键词）" else "✗ 不会触发：未匹配 ${result.missingKeywords.joinToString("、")}"
+                    }, enabled = testBody.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text("测试规则") }
                     testResult?.let { Text(it, color = if (it.startsWith("✓")) Color(0xFF1B8A4A) else MaterialTheme.colorScheme.error) }
                 } else {
                     OutlinedTextField(value = phone, onValueChange = { phone = it; error = null }, label = { Text("手机号码") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone), singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -385,13 +481,51 @@ private fun RuleEditorDialog(initial: Rule, onDismiss: () -> Unit, onSave: (Rule
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        dismissButton = { TextButton(onClick = requestDismiss) { Text("取消") } },
         confirmButton = {
             TextButton(onClick = {
-                if (!platform && RuleEngine.normalizePhone(phone).length < 11) { error = "请输入有效的手机号"; return@TextButton }
-                if (platform && (name.isBlank() || keywords.isEmpty())) { error = "请填写规则名称和至少一个关键词"; return@TextButton }
-                onSave(if (platform) initial.copy(name = name.trim(), keywords = keywords) else initial.copy(phoneNumber = RuleEngine.normalizePhone(phone)))
+                if (!platform) {
+                    val normalized = RuleEngine.normalizePhone(phone)
+                    if (!normalized.matches(Regex("1[3-9]\\d{9}"))) {
+                        error = "请输入有效的大陆手机号"
+                        return@TextButton
+                    }
+                    if (existingRules.any { it.id != initial.id && it.type == RuleType.PHONE && RuleEngine.normalizePhone(it.phoneNumber) == normalized }) {
+                        error = "该手机号已有监听规则"
+                        return@TextButton
+                    }
+                    onSave(initial.copy(phoneNumber = normalized))
+                } else {
+                    if (name.isBlank() || enteredKeywords.isEmpty()) {
+                        error = "请填写规则名称和至少一个关键词"
+                        return@TextButton
+                    }
+                    if (enteredKeywords.size > 5) {
+                        error = "最多只能填写 5 个关键词"
+                        return@TextButton
+                    }
+                    if (enteredKeywords.distinct().size != enteredKeywords.size) {
+                        error = "关键词不能重复"
+                        return@TextButton
+                    }
+                    onSave(initial.copy(name = name.trim(), keywords = enteredKeywords))
+                }
             }) { Text("保存") }
         }
     )
+
+    if (showDiscardConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showDiscardConfirmation = false },
+            title = { Text("放弃未保存的修改？") },
+            text = { Text("返回后，本次编辑内容将丢失。") },
+            dismissButton = { TextButton(onClick = { showDiscardConfirmation = false }) { Text("继续编辑") } },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDiscardConfirmation = false
+                    onDismiss()
+                }) { Text("放弃修改", color = MaterialTheme.colorScheme.error) }
+            }
+        )
+    }
 }
