@@ -7,6 +7,7 @@ import android.provider.Telephony
 import com.messagestar.app.alert.AlertCoordinator
 import com.messagestar.app.data.SettingsRepository
 import com.messagestar.app.rules.RuleEngine
+import com.messagestar.app.notification.NotificationLightAlert
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -28,7 +29,10 @@ class SmsReceiver : BroadcastReceiver() {
                 if (sender.isBlank() || body.isBlank()) return@launch
                 val rules = repository.currentRules()
                 if (RuleEngine.match(rules, sender, body).matched) {
-                    AlertCoordinator.trigger(appContext, sender)
+                    SmsAlertDedupe.mark(appContext, body)
+                    if (!AlertCoordinator.trigger(appContext, sender)) {
+                        NotificationLightAlert.show(appContext, "短信", "来自${sender}的重要短信", criticalFallback = true)
+                    }
                 }
             } finally {
                 pending.finish()

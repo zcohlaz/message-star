@@ -9,11 +9,13 @@ import com.messagestar.app.data.AlertStateStore
 
 object AlertNotification {
     const val CHANNEL_ID = "critical_sms_alert"
+    const val NOTIFICATION_CHANNEL_ID = "critical_app_alert"
     const val ACTION_STOP = "com.messagestar.app.action.STOP_ALERT"
     const val ACTION_UPDATE = "com.messagestar.app.action.UPDATE_ALERT"
 
     fun build(context: Context, useFullScreenIntent: Boolean = true): android.app.Notification {
         val state = AlertStateStore.snapshot(context)
+        val sourceType = state.sourceType
         val fullScreenIntent = PendingIntent.getActivity(
             context,
             100,
@@ -28,14 +30,15 @@ object AlertNotification {
             Intent(context, AlertService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        return NotificationCompat.Builder(context, CHANNEL_ID)
+        val channelId = if (sourceType == "短信") CHANNEL_ID else NOTIFICATION_CHANNEL_ID
+        return NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_launcher)
-            .setContentTitle("重要短信")
-            .setContentText("收到 ${state.count.coerceAtLeast(1)} 条重要短信")
-            .setSubText(if (state.latestSender.isBlank()) "请立即查看" else "发送号码：${state.latestSender}")
+            .setContentTitle("重要${sourceType}")
+            .setContentText("收到 ${state.count.coerceAtLeast(1)} 条重要${sourceType}")
+            .setSubText(if (state.latestSender.isBlank()) "请立即查看" else "来源：${state.latestSender}")
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setVisibility(if (sourceType == "短信") NotificationCompat.VISIBILITY_PUBLIC else NotificationCompat.VISIBILITY_PRIVATE)
             .setOngoing(true)
             .setAutoCancel(false)
             .apply {

@@ -75,6 +75,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -87,6 +88,7 @@ import com.messagestar.app.data.Rule
 import com.messagestar.app.data.RuleType
 import com.messagestar.app.data.SettingsRepository
 import com.messagestar.app.permissions.DeviceSettingsHelper
+import com.messagestar.app.notification.NotificationManagementScreen
 import com.messagestar.app.rules.RuleEngine
 import com.messagestar.app.ui.MessageStarTheme
 import kotlinx.coroutines.launch
@@ -98,6 +100,7 @@ private object AppScreen {
     const val HOME = "home"
     const val SETTINGS = "settings"
     const val PERMISSIONS = "permissions"
+    const val NOTIFICATIONS = "notifications"
 }
 
 class MainActivity : ComponentActivity() {
@@ -162,7 +165,8 @@ private fun MessageStarApp(repository: SettingsRepository, activity: MainActivit
                         onDelete = { pendingDeleteJson = Json.encodeToString(it) },
                         onAdd = { if (rules.size < 10) showTypePicker = true },
                         onSettings = { navController.navigate(AppScreen.SETTINGS) },
-                        onPermission = { navController.navigate(AppScreen.PERMISSIONS) }
+                        onPermission = { navController.navigate(AppScreen.PERMISSIONS) },
+                        onNotificationManagement = { navController.navigate(AppScreen.NOTIFICATIONS) }
                     )
                 }
             }
@@ -182,6 +186,9 @@ private fun MessageStarApp(repository: SettingsRepository, activity: MainActivit
                     onPermission = { navController.navigate(AppScreen.PERMISSIONS) },
                     onTest = { AlertCoordinator.trigger(activity, "测试短信", testMode = true) }
                 )
+            }
+            composable(AppScreen.NOTIFICATIONS) {
+                NotificationManagementScreen(repository, permissionRevision, onBack = { navController.popBackStack() })
             }
             composable(AppScreen.PERMISSIONS) {
                 PermissionScreen(
@@ -272,7 +279,8 @@ private fun HomeScreen(
     onDelete: (Rule) -> Unit,
     onAdd: () -> Unit,
     onSettings: () -> Unit,
-    onPermission: () -> Unit
+    onPermission: () -> Unit,
+    onNotificationManagement: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val smsGranted = remember(permissionRevision) { ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED }
@@ -341,6 +349,7 @@ private fun HomeScreen(
             Button(onClick = onAdd, enabled = rules.size < 10, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Add, null); Spacer(Modifier.size(6.dp)); Text(if (rules.size < 10) "添加规则" else "已达上限") }
             OutlinedButton(onClick = onSettings, modifier = Modifier.weight(0.55f)) { Icon(Icons.Default.Settings, null); Spacer(Modifier.size(4.dp)); Text("设置") }
         }
+        OutlinedButton(onClick = onNotificationManagement, modifier = Modifier.fillMaxWidth()) { Text("通知筛选与收纳") }
         if (!smsGranted || !notificationGranted) {
             TextButton(onClick = { launcher.launch(buildList { add(Manifest.permission.RECEIVE_SMS); add(Manifest.permission.READ_PHONE_STATE); if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS) }.toTypedArray()) }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("申请基础权限") }
         }
@@ -397,6 +406,7 @@ private fun PermissionScreen(onBack: () -> Unit, permissionRevision: Int, onPerm
     val notifications = remember(permissionRevision) { Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED }
     val fullScreen = remember(permissionRevision) { Build.VERSION.SDK_INT < 34 || context.getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent() }
     val overlay = remember(permissionRevision) { Settings.canDrawOverlays(context) }
+    val notificationListener = remember(permissionRevision) { NotificationManagerCompat.getEnabledListenerPackages(context).contains(packageName) }
     val power = remember(permissionRevision) { context.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName) == true }
     val manufacturer = DeviceSettingsHelper.manufacturerName()
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { onPermissionResult() }
@@ -405,6 +415,7 @@ private fun PermissionScreen(onBack: () -> Unit, permissionRevision: Int, onPerm
             item { Text("为了尽可能可靠地提醒，请检查以下项目。vivo 的菜单名称可能随 OriginOS 版本变化。", style = MaterialTheme.typography.bodyMedium) }
             item { PermissionRow("SMS 接收权限", sms, onClick = { launcher.launch(arrayOf(Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_PHONE_STATE)) }) }
             item { PermissionRow("通知权限", notifications, onClick = { if (Build.VERSION.SDK_INT >= 33) launcher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS)) }) }
+            item { PermissionRow("通知使用权", notificationListener, onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) }
             item { PermissionRow("通话状态权限", ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED, onClick = { launcher.launch(arrayOf(Manifest.permission.READ_PHONE_STATE)) }) }
             item { PermissionRow("全屏提醒权限", fullScreen, onClick = { if (Build.VERSION.SDK_INT >= 34) context.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:$packageName"))) }) }
             item { PermissionRow("后台弹窗权限", overlay, onClick = { context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) }) }

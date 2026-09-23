@@ -31,6 +31,7 @@ import android.widget.TextView
 import androidx.lifecycle.LifecycleService
 import com.messagestar.app.data.AlertStateStore
 import com.messagestar.app.data.SettingsRepository
+import com.messagestar.app.notification.NotificationLightAlert
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -42,6 +43,8 @@ import kotlinx.coroutines.launch
 class AlertService : LifecycleService() {
     companion object {
         private const val TAG = "MessageStarAlert"
+        @Volatile var running: Boolean = false
+            private set
         private const val NOTIFICATION_ID = 77
         private const val MAX_ALERT_DURATION_MS = 5 * 60 * 1000L
     }
@@ -79,10 +82,20 @@ class AlertService : LifecycleService() {
         }
 
         val canUseOverlay = Settings.canDrawOverlays(this)
-        startForeground(
-            NOTIFICATION_ID,
-            AlertNotification.build(this, useFullScreenIntent = !canUseOverlay)
-        )
+        val foregroundStarted = runCatching {
+            startForeground(
+                NOTIFICATION_ID,
+                AlertNotification.build(this, useFullScreenIntent = !canUseOverlay && AlertStateStore.snapshot(this).sourceType == "短信")
+            )
+        }.onFailure { error ->
+            Log.e(TAG, "Unable to enter foreground", error)
+            val state = AlertStateStore.snapshot(this)
+            AlertStateStore.stop(this, cooldown = false)
+            runCatching { NotificationLightAlert.show(this, state.sourceType, state.latestSender, criticalFallback = true) }
+            stopSelf()
+        }.isSuccess
+        if (!foregroundStarted) return START_NOT_STICKY
+        running = true
         acquireWakeLock()
         scheduleAutomaticStop()
 
@@ -236,7 +249,7 @@ class AlertService : LifecycleService() {
 
     private fun showOrRefreshOverlay() {
         val state = AlertStateStore.snapshot(this)
-        overlayMessage?.text = buildOverlayMessage(state.count, state.latestSender)
+        overlayMessage?.text = buildOverlayMessage(state.count, state.latestSender, state.sourceType)
         if (overlayView != null) return
 
         val windowManager = getSystemService(WindowManager::class.java)
@@ -261,13 +274,13 @@ class AlertService : LifecycleService() {
             setOnClickListener { }
         }
         card.addView(TextView(this).apply {
-            text = "重要短信"
+            text = if (state.sourceType == "短信") "重要短信" else "重要通知"
             textSize = 28f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
         })
         overlayMessage = TextView(this).apply {
-            text = buildOverlayMessage(state.count, state.latestSender)
+            text = buildOverlayMessage(state.count, state.latestSender, state.sourceType)
             textSize = 17f
             setTextColor(0xFFEDE9FE.toInt())
             gravity = Gravity.CENTER
@@ -312,9 +325,9 @@ class AlertService : LifecycleService() {
         }.onFailure { Log.e(TAG, "Unable to show background alert overlay", it) }
     }
 
-    private fun buildOverlayMessage(count: Int, sender: String): String = buildString {
-        append("收到 ${count.coerceAtLeast(1)} 条重要短信")
-        if (sender.isNotBlank()) append("\n发送号码：$sender")
+    private fun buildOverlayMessage(count: Int, sender: String, sourceType: String): String = buildString {
+        append("收到 ${count.coerceAtLeast(1)} 条重要${sourceType}")
+        if (sender.isNotBlank()) append("\n来源：$sender")
         append("\n点击按钮或背景可关闭")
     }
 
@@ -357,6 +370,7 @@ class AlertService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        running = false
         removeOverlay()
         stopPlayback()
         serviceScope.cancel()

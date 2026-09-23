@@ -70,11 +70,11 @@ class AlertActivity : ComponentActivity() {
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        Text("重要短信", style = MaterialTheme.typography.displaySmall, color = Color.White)
+                        Text("重要${snapshot.sourceType}", style = MaterialTheme.typography.displaySmall, color = Color.White)
                         Spacer(Modifier.height(20.dp))
-                        Text("收到 ${snapshot.count.coerceAtLeast(1)} 条重要短信", style = MaterialTheme.typography.headlineSmall, color = Color.White)
+                        Text("收到 ${snapshot.count.coerceAtLeast(1)} 条重要${snapshot.sourceType}", style = MaterialTheme.typography.headlineSmall, color = Color.White)
                         Spacer(Modifier.height(14.dp))
-                        Text("发送号码：${snapshot.latestSender.ifBlank { "未知" }}", color = Color(0xFFE6DFF5))
+                        Text("来源：${snapshot.latestSender.ifBlank { "未知" }}", color = Color(0xFFE6DFF5))
                         Text(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()), color = Color(0xFFE6DFF5))
                         Spacer(Modifier.height(44.dp))
                         Button(onClick = { closeAlert() }, modifier = Modifier.fillMaxWidth().height(58.dp)) {

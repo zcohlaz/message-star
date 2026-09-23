@@ -28,5 +28,6 @@ data class AlertSnapshot(
     val isAlerting: Boolean,
     val count: Int,
     val latestSender: String,
-    val cooldownUntil: Long
+    val cooldownUntil: Long,
+    val sourceType: String = "短信"
 )
