@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.MessageStar" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#B9B6FF</item>
+        <item name="android:navigationBarColor">#1B1C26</item>
+        <item name="android:statusBarColor">#1B1C26</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
