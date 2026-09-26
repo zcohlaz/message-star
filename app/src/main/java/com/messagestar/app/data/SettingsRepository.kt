@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.messagestar.app.notification.NotificationRule
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.encodeToString
@@ -42,6 +43,14 @@ class SettingsRepository(private val context: Context) {
         runCatching { json.decodeFromString<List<NotificationRule>>(prefs[Keys.notificationRules] ?: "[]") }.getOrDefault(emptyList())
     }
 
+    val notificationFilterConfig: Flow<NotificationFilterConfig> = context.settingsDataStore.data.map { prefs ->
+        NotificationFilterConfig(
+            enabled = prefs[Keys.notificationFiltering] ?: false,
+            managedPackages = runCatching { json.decodeFromString<List<String>>(prefs[Keys.managedPackages] ?: "[]").toSet() }.getOrDefault(emptySet()),
+            rules = runCatching { json.decodeFromString<List<NotificationRule>>(prefs[Keys.notificationRules] ?: "[]") }.getOrDefault(emptyList())
+        )
+    }.distinctUntilChanged()
+
     suspend fun setMasterEnabled(value: Boolean) = context.settingsDataStore.edit { it[Keys.masterEnabled] = value }
     suspend fun setVibrationEnabled(value: Boolean) = context.settingsDataStore.edit { it[Keys.vibrationEnabled] = value }
     suspend fun setRingtoneUri(value: String?) = context.settingsDataStore.edit {
@@ -68,4 +77,12 @@ class SettingsRepository(private val context: Context) {
     suspend fun currentMasterEnabled(): Boolean = masterEnabled.first()
     suspend fun currentVibrationEnabled(): Boolean = vibrationEnabled.first()
     suspend fun currentRingtoneUri(): String? = ringtoneUri.first()
+}
+
+data class NotificationFilterConfig(
+    val enabled: Boolean,
+    val managedPackages: Set<String>,
+    val rules: List<NotificationRule>
+) {
+    fun shouldEvaluate(packageName: String): Boolean = enabled && packageName in managedPackages
 }

@@ -7,6 +7,7 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.messagestar.app.alert.AlertCoordinator
+import com.messagestar.app.data.NotificationFilterConfig
 import com.messagestar.app.data.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,16 +15,31 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import java.util.concurrent.ConcurrentHashMap
 
 class NotificationCollectorService : NotificationListenerService() {
-    companion object { private const val TAG = "MessageStarListener" }
+    companion object {
+        private const val TAG = "MessageStarListener"
+        private const val OBSERVE_INTERVAL_MS = 60 * 60 * 1000L
+    }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val handled = ConcurrentHashMap<String, Int>()
     private val observedAt = ConcurrentHashMap<String, Long>()
+    private val appLabels = ConcurrentHashMap<String, String>()
     private val store by lazy { NotificationArchiveStore(applicationContext) }
+    private val settings by lazy { SettingsRepository(applicationContext) }
+    @Volatile private var filterConfig: NotificationFilterConfig? = null
     @Volatile private var connected = false
+
+    override fun onCreate() {
+        super.onCreate()
+        scope.launch {
+            settings.notificationFilterConfig.collect { filterConfig = it }
+        }
+    }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
@@ -37,6 +53,10 @@ class NotificationCollectorService : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         if (sbn.packageName == packageName || sbn.packageName == "android" || sbn.packageName.startsWith("com.android.")) return
+        observeSource(sbn.packageName)
+        val cachedConfig = filterConfig
+        if (cachedConfig != null && !cachedConfig.shouldEvaluate(sbn.packageName)) return
+
         val original = sbn.notification
         val facts = NotificationFacts(
             packageName = sbn.packageName,
@@ -54,22 +74,17 @@ class NotificationCollectorService : NotificationListenerService() {
 
         scope.launch {
             try {
-                val appLabel = runCatching {
-                    packageManager.getApplicationLabel(packageManager.getApplicationInfo(sbn.packageName, 0)).toString()
-                }.getOrDefault(sbn.packageName)
-                val now = System.currentTimeMillis()
-                val lastObserved = observedAt[sbn.packageName] ?: 0L
-                if (now - lastObserved > 60 * 60 * 1000L) {
-                    observedAt[sbn.packageName] = now
-                    store.observeApp(sbn.packageName, appLabel, now)
+                val config = filterConfig ?: settings.notificationFilterConfig.first()
+                if (!config.shouldEvaluate(sbn.packageName)) {
+                    handled.remove(key, fingerprint)
+                    return@launch
                 }
-
-                val settings = SettingsRepository(applicationContext)
+                val appLabel = appLabelFor(sbn.packageName)
                 val evaluation = NotificationPolicy.evaluate(
                     facts,
-                    settings.currentNotificationFiltering(),
-                    settings.currentManagedPackages(),
-                    settings.currentNotificationRules()
+                    config.enabled,
+                    config.managedPackages,
+                    config.rules
                 )
                 if (handled[key] != fingerprint) return@launch
                 when (evaluation.decision) {
@@ -95,6 +110,27 @@ class NotificationCollectorService : NotificationListenerService() {
                 Log.e(TAG, "Unable to process notification from ${sbn.packageName}", error)
             }
         }
+    }
+
+    private fun observeSource(sourcePackage: String) {
+        val now = System.currentTimeMillis()
+        val previous = observedAt[sourcePackage] ?: 0L
+        if (now - previous <= OBSERVE_INTERVAL_MS) return
+        observedAt[sourcePackage] = now
+        scope.launch {
+            try {
+                store.observeApp(sourcePackage, appLabelFor(sourcePackage), now)
+            } catch (error: Exception) {
+                observedAt.remove(sourcePackage, now)
+                Log.e(TAG, "Unable to record notification source $sourcePackage", error)
+            }
+        }
+    }
+
+    private fun appLabelFor(sourcePackage: String): String = appLabels.computeIfAbsent(sourcePackage) { source ->
+        runCatching {
+            packageManager.getApplicationLabel(packageManager.getApplicationInfo(source, 0)).toString()
+        }.getOrDefault(source)
     }
 
     private suspend fun duplicateSmsAlert(packageName: String, body: String): Boolean {
