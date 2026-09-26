@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -30,11 +29,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,6 +39,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,12 +56,10 @@ import java.text.DateFormat
 import java.util.Date
 import java.util.UUID
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NotificationManagementScreen(
     repository: SettingsRepository,
-    permissionRevision: Int,
-    onBack: () -> Unit
+    permissionRevision: Int
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -76,7 +72,7 @@ fun NotificationManagementScreen(
     }
     var observed by remember { mutableStateOf<List<ObservedApp>>(emptyList()) }
     var archive by remember { mutableStateOf<List<ArchivedNotification>>(emptyList()) }
-    var tab by remember { mutableIntStateOf(0) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
     var editing by remember { mutableStateOf<NotificationRule?>(null) }
     var removing by remember { mutableStateOf<NotificationRule?>(null) }
     var clearArchive by remember { mutableStateOf(false) }
@@ -91,109 +87,107 @@ fun NotificationManagementScreen(
         archive = result.second
     }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("通知筛选与收纳") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "返回") } }) }) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize().padding(horizontal = 16.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = tab == 0, onClick = { tab = 0 }, label = { Text("筛选规则") })
-                FilterChip(selected = tab == 1, onClick = { tab = 1 }, label = { Text("收纳箱 ${archive.size}") })
-            }
-            LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (tab == 0) {
-                    item {
-                        Card(Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text("启用通知筛选", fontWeight = FontWeight.SemiBold)
-                                        Text("仅处理下方选定的 APP；其他 APP 保持原样", style = MaterialTheme.typography.bodySmall)
-                                    }
-                                    Switch(checked = enabled, enabled = hasAccess, onCheckedChange = { value ->
-                                        scope.launch { repository.setNotificationFiltering(value) }
-                                    })
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = tab == 0, onClick = { tab = 0 }, label = { Text("筛选规则") })
+            FilterChip(selected = tab == 1, onClick = { tab = 1 }, label = { Text("收纳箱 ${archive.size}") })
+        }
+        LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (tab == 0) {
+                item {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("启用通知筛选", fontWeight = FontWeight.SemiBold)
+                                    Text("仅处理下方选定的 APP；其他 APP 保持原样", style = MaterialTheme.typography.bodySmall)
                                 }
-                                if (!hasAccess) {
-                                    Text("先授予通知使用权。授权后，发送过通知的 APP 会出现在下方。", style = MaterialTheme.typography.bodySmall)
-                                    OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) { Text("打开通知使用权设置") }
-                                } else {
-                                    Text("已获得通知使用权。受管 APP 的来源通知还需在系统中设为静默，并关闭横幅。", style = MaterialTheme.typography.bodySmall)
-                                }
-                            }
-                        }
-                    }
-                    item { Text("管理的 APP", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
-                    if (observed.isEmpty()) item {
-                        Text("暂未检测到其他 APP 的通知。授权后，让目标 APP 发来一条通知，即可在这里选择。", style = MaterialTheme.typography.bodyMedium)
-                    }
-                    items(observed, key = { "app:${it.packageName}" }) { app ->
-                        Card(Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(14.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text(app.label, fontWeight = FontWeight.SemiBold)
-                                        Text(app.packageName, style = MaterialTheme.typography.bodySmall)
-                                    }
-                                    Switch(checked = app.packageName in managed, onCheckedChange = { checked ->
-                                        scope.launch {
-                                            val current = repository.currentManagedPackages()
-                                            repository.saveManagedPackages(if (checked) current + app.packageName else current - app.packageName)
-                                        }
-                                    })
-                                }
-                                if (app.packageName in managed) {
-                                    Text("未命中白名单的通知将进入收纳箱。请先将来源通知设为静默。", style = MaterialTheme.typography.bodySmall)
-                                    TextButton(onClick = {
-                                        context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, app.packageName))
-                                    }) { Text("打开该 APP 的通知设置") }
-                                }
-                            }
-                        }
-                    }
-                    item {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("重要通知规则", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                            Button(enabled = managed.isNotEmpty(), onClick = {
-                                editing = NotificationRule(UUID.randomUUID().toString(), managed.sorted().first())
-                            }) { Text("添加规则") }
-                        }
-                    }
-                    if (rules.isEmpty()) item { Text("还没有白名单规则。受管 APP 的普通通知会被静默收纳。", style = MaterialTheme.typography.bodySmall) }
-                    items(rules, key = { "rule:${it.id}" }) { rule ->
-                        Card(Modifier.fillMaxWidth()) {
-                            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f).clickable { editing = rule }) {
-                                    Text(ruleLabel(rule), fontWeight = FontWeight.SemiBold)
-                                    Text("${rule.packageName} · ${actionLabel(rule.action)}", style = MaterialTheme.typography.bodySmall)
-                                }
-                                Switch(checked = rule.enabled, onCheckedChange = { checked ->
-                                    scope.launch { repository.saveNotificationRules(repository.currentNotificationRules().map { if (it.id == rule.id) it.copy(enabled = checked) else it }) }
+                                Switch(checked = enabled, enabled = hasAccess, onCheckedChange = { value ->
+                                    scope.launch { repository.setNotificationFiltering(value) }
                                 })
-                                IconButton(onClick = { removing = rule }) { Icon(Icons.Default.Delete, "删除规则") }
+                            }
+                            if (!hasAccess) {
+                                Text("先授予通知使用权。授权后，发送过通知的 APP 会出现在下方。", style = MaterialTheme.typography.bodySmall)
+                                OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) { Text("打开通知使用权设置") }
+                            } else {
+                                Text("已获得通知使用权。受管 APP 的来源通知还需在系统中设为静默，并关闭横幅。", style = MaterialTheme.typography.bodySmall)
                             }
                         }
                     }
-                    item {
-                        Text("规则按列表顺序匹配，第一条命中的规则生效。内容不可读取或持续运行的通知会保留。", style = MaterialTheme.typography.bodySmall)
-                    }
-                } else {
-                    item { Text("收纳箱只保存通知记录，原 APP 里的消息仍由原 APP 管理。记录最多保存 30 天、1000 条。", style = MaterialTheme.typography.bodySmall) }
-                    if (archive.isEmpty()) item { Text("还没有收纳的通知。", style = MaterialTheme.typography.bodyMedium) }
-                    if (archive.isNotEmpty()) item {
-                        TextButton(onClick = { clearArchive = true }) { Text("清空收纳箱") }
-                    }
-                    items(archive, key = { "archive:${it.key}" }) { entry ->
-                        Card(Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(14.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(entry.appLabel, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-                                    Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(entry.postedAt)), style = MaterialTheme.typography.bodySmall)
+                }
+                item { Text("管理的 APP", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+                if (observed.isEmpty()) item {
+                    Text("暂未检测到其他 APP 的通知。授权后，让目标 APP 发来一条通知，即可在这里选择。", style = MaterialTheme.typography.bodyMedium)
+                }
+                items(observed, key = { "app:${it.packageName}" }) { app ->
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(app.label, fontWeight = FontWeight.SemiBold)
+                                    Text(app.packageName, style = MaterialTheme.typography.bodySmall)
                                 }
-                                if (entry.title.isNotBlank()) Text(entry.title)
-                                if (entry.body.isNotBlank()) Text(entry.body, style = MaterialTheme.typography.bodySmall)
-                                Text(entry.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                                TextButton(onClick = {
-                                    scope.launch(Dispatchers.IO) { NotificationArchiveStore(context.applicationContext).use { it.delete(entry.key) } }
-                                }) { Text("删除记录") }
+                                Switch(checked = app.packageName in managed, onCheckedChange = { checked ->
+                                    scope.launch {
+                                        val current = repository.currentManagedPackages()
+                                        repository.saveManagedPackages(if (checked) current + app.packageName else current - app.packageName)
+                                    }
+                                })
                             }
+                            if (app.packageName in managed) {
+                                Text("未命中白名单的通知将进入收纳箱。请先将来源通知设为静默。", style = MaterialTheme.typography.bodySmall)
+                                TextButton(onClick = {
+                                    context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, app.packageName))
+                                }) { Text("打开该 APP 的通知设置") }
+                            }
+                        }
+                    }
+                }
+                item {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("重要通知规则", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Button(enabled = managed.isNotEmpty(), onClick = {
+                            editing = NotificationRule(UUID.randomUUID().toString(), managed.sorted().first())
+                        }) { Text("添加规则") }
+                    }
+                }
+                if (rules.isEmpty()) item { Text("还没有白名单规则。受管 APP 的普通通知会被静默收纳。", style = MaterialTheme.typography.bodySmall) }
+                items(rules, key = { "rule:${it.id}" }) { rule ->
+                    Card(Modifier.fillMaxWidth()) {
+                        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f).clickable { editing = rule }) {
+                                Text(ruleLabel(rule), fontWeight = FontWeight.SemiBold)
+                                Text("${rule.packageName} · ${actionLabel(rule.action)}", style = MaterialTheme.typography.bodySmall)
+                            }
+                            Switch(checked = rule.enabled, onCheckedChange = { checked ->
+                                scope.launch { repository.saveNotificationRules(repository.currentNotificationRules().map { if (it.id == rule.id) it.copy(enabled = checked) else it }) }
+                            })
+                            IconButton(onClick = { removing = rule }) { Icon(Icons.Default.Delete, "删除规则") }
+                        }
+                    }
+                }
+                item {
+                    Text("规则按列表顺序匹配，第一条命中的规则生效。内容不可读取或持续运行的通知会保留。", style = MaterialTheme.typography.bodySmall)
+                }
+            } else {
+                item { Text("收纳箱只保存通知记录，原 APP 里的消息仍由原 APP 管理。记录最多保存 30 天、1000 条。", style = MaterialTheme.typography.bodySmall) }
+                if (archive.isEmpty()) item { Text("还没有收纳的通知。", style = MaterialTheme.typography.bodyMedium) }
+                if (archive.isNotEmpty()) item {
+                    TextButton(onClick = { clearArchive = true }) { Text("清空收纳箱") }
+                }
+                items(archive, key = { "archive:${it.key}" }) { entry ->
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(entry.appLabel, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                                Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(entry.postedAt)), style = MaterialTheme.typography.bodySmall)
+                            }
+                            if (entry.title.isNotBlank()) Text(entry.title)
+                            if (entry.body.isNotBlank()) Text(entry.body, style = MaterialTheme.typography.bodySmall)
+                            Text(entry.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                            TextButton(onClick = {
+                                scope.launch(Dispatchers.IO) { NotificationArchiveStore(context.applicationContext).use { it.delete(entry.key) } }
+                            }) { Text("删除记录") }
                         }
                     }
                 }

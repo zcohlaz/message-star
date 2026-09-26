@@ -16,8 +16,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,9 +32,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -47,6 +48,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -59,6 +62,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -68,7 +72,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
@@ -76,13 +79,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.NavGraph.Companion.findStartDestination
 import com.messagestar.app.alert.AlertCoordinator
 import com.messagestar.app.data.Rule
 import com.messagestar.app.data.RuleType
@@ -110,7 +116,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         repository = SettingsRepository(applicationContext)
         setContent {
-            MessageStarTheme {
+            val darkTheme = isSystemInDarkTheme()
+            MessageStarTheme(darkTheme = darkTheme) {
+                SideEffect {
+                    WindowCompat.getInsetsController(window, window.decorView).apply {
+                        isAppearanceLightStatusBars = !darkTheme
+                        isAppearanceLightNavigationBars = !darkTheme
+                    }
+                }
                 MessageStarApp(repository = repository, activity = this)
             }
         }
@@ -129,6 +142,8 @@ private fun MessageStarApp(repository: SettingsRepository, activity: MainActivit
     val vibrationEnabled by repository.vibrationEnabled.collectAsStateWithLifecycle(initialValue = true)
     val ringtoneUri by repository.ringtoneUri.collectAsStateWithLifecycle(initialValue = null)
     val navController = rememberNavController()
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = backStackEntry?.destination?.route ?: AppScreen.HOME
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var permissionRevision by remember { mutableIntStateOf(0) }
@@ -144,37 +159,82 @@ private fun MessageStarApp(repository: SettingsRepository, activity: MainActivit
         onDispose { activity.lifecycle.removeObserver(observer) }
     }
 
-    Box(Modifier.fillMaxSize()) {
-        NavHost(navController = navController, startDestination = AppScreen.HOME) {
-            composable(AppScreen.HOME) {
-                Scaffold(topBar = { TopAppBar(title = { Text("短信强提醒", fontWeight = FontWeight.Bold) }) }) { padding ->
-                    HomeScreen(
-                        modifier = Modifier.padding(padding),
-                        rules = rules,
-                        masterEnabled = masterEnabled,
-                        permissionRevision = permissionRevision,
-                        onPermissionResult = { permissionRevision++ },
-                        onMasterChanged = { activity.save { setMasterEnabled(it) }; scope.launch { snackbarHostState.showSnackbar(if (it) "强提醒已开启" else "强提醒已暂停") } },
-                        onRuleChanged = { changed ->
-                            scope.launch {
-                                repository.saveRules(repository.currentRules().map { if (it.id == changed.id) changed else it })
-                                snackbarHostState.showSnackbar(if (changed.enabled) "规则已开启" else "规则已暂停")
-                            }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        when (currentRoute) {
+                            AppScreen.NOTIFICATIONS -> "通知收纳"
+                            AppScreen.SETTINGS -> "设置"
+                            AppScreen.PERMISSIONS -> "权限检查"
+                            else -> "强提醒"
                         },
-                        onEdit = { editingRuleJson = Json.encodeToString(it) },
-                        onDelete = { pendingDeleteJson = Json.encodeToString(it) },
-                        onAdd = { if (rules.size < 10) showTypePicker = true },
-                        onSettings = { navController.navigate(AppScreen.SETTINGS) },
-                        onPermission = { navController.navigate(AppScreen.PERMISSIONS) },
-                        onNotificationManagement = { navController.navigate(AppScreen.NOTIFICATIONS) }
+                        fontWeight = FontWeight.Bold
                     )
+                },
+                navigationIcon = {
+                    if (currentRoute == AppScreen.PERMISSIONS) {
+                        IconButton(onClick = { navController.popBackStack() }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
+                        }
+                    }
                 }
+            )
+        },
+        bottomBar = {
+            if (currentRoute != AppScreen.PERMISSIONS) {
+                NavigationBar {
+                    listOf(
+                        Triple(AppScreen.HOME, "强提醒", Icons.Default.NotificationsActive),
+                        Triple(AppScreen.NOTIFICATIONS, "通知收纳", Icons.Default.Inbox),
+                        Triple(AppScreen.SETTINGS, "设置", Icons.Default.Settings)
+                    ).forEach { (route, label, icon) ->
+                        NavigationBarItem(
+                            selected = currentRoute == route,
+                            onClick = {
+                                if (currentRoute != route) {
+                                    navController.navigate(route) {
+                                        popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
+                                }
+                            },
+                            icon = { Icon(icon, contentDescription = null) },
+                            label = { Text(label) }
+                        )
+                    }
+                }
+            }
+        },
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
+    ) { padding ->
+        NavHost(navController = navController, startDestination = AppScreen.HOME, modifier = Modifier.padding(padding)) {
+            composable(AppScreen.HOME) {
+                HomeScreen(
+                    modifier = Modifier,
+                    rules = rules,
+                    masterEnabled = masterEnabled,
+                    permissionRevision = permissionRevision,
+                    onPermissionResult = { permissionRevision++ },
+                    onMasterChanged = { activity.save { setMasterEnabled(it) }; scope.launch { snackbarHostState.showSnackbar(if (it) "强提醒已开启" else "强提醒已暂停") } },
+                    onRuleChanged = { changed ->
+                        scope.launch {
+                            repository.saveRules(repository.currentRules().map { if (it.id == changed.id) changed else it })
+                            snackbarHostState.showSnackbar(if (changed.enabled) "规则已开启" else "规则已暂停")
+                        }
+                    },
+                    onEdit = { editingRuleJson = Json.encodeToString(it) },
+                    onDelete = { pendingDeleteJson = Json.encodeToString(it) },
+                    onAdd = { if (rules.size < 10) showTypePicker = true },
+                    onPermission = { navController.navigate(AppScreen.PERMISSIONS) }
+                )
             }
             composable(AppScreen.SETTINGS) {
                 SettingsScreen(
                     vibrationEnabled = vibrationEnabled,
                     ringtoneUri = ringtoneUri,
-                    onBack = { navController.popBackStack() },
                     onVibrationChanged = { value ->
                         activity.save { setVibrationEnabled(value) }
                         scope.launch { snackbarHostState.showSnackbar(if (value) "振动已开启" else "振动已关闭") }
@@ -188,17 +248,15 @@ private fun MessageStarApp(repository: SettingsRepository, activity: MainActivit
                 )
             }
             composable(AppScreen.NOTIFICATIONS) {
-                NotificationManagementScreen(repository, permissionRevision, onBack = { navController.popBackStack() })
+                NotificationManagementScreen(repository, permissionRevision)
             }
             composable(AppScreen.PERMISSIONS) {
                 PermissionScreen(
-                    onBack = { navController.popBackStack() },
                     permissionRevision = permissionRevision,
                     onPermissionResult = { permissionRevision++ }
                 )
             }
         }
-        SnackbarHost(hostState = snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter))
     }
 
     if (showTypePicker) {
@@ -278,9 +336,7 @@ private fun HomeScreen(
     onEdit: (Rule) -> Unit,
     onDelete: (Rule) -> Unit,
     onAdd: () -> Unit,
-    onSettings: () -> Unit,
-    onPermission: () -> Unit,
-    onNotificationManagement: () -> Unit
+    onPermission: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val smsGranted = remember(permissionRevision) { ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED }
@@ -293,9 +349,11 @@ private fun HomeScreen(
     val listState = rememberLazyListState()
     Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(12.dp))
-        Card(colors = CardDefaults.cardColors(containerColor = if (healthy) Color(0xFFE9F8EE) else Color(0xFFFFF0EF)), modifier = Modifier.fillMaxWidth().clickable { onPermission() }) {
+        val statusBackground = if (healthy) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.errorContainer
+        val statusForeground = if (healthy) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onErrorContainer
+        Card(colors = CardDefaults.cardColors(containerColor = statusBackground, contentColor = statusForeground), modifier = Modifier.fillMaxWidth().clickable { onPermission() }) {
             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(if (healthy) "●" else "⚠", color = if (healthy) Color(0xFF1B8A4A) else Color(0xFFC62828), fontSize = 22.sp)
+                Text(if (healthy) "●" else "⚠", color = statusForeground, fontSize = 22.sp)
                 Spacer(Modifier.size(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(if (healthy) "强提醒正常" else "强提醒功能可能无法正常工作", fontWeight = FontWeight.SemiBold)
@@ -345,11 +403,11 @@ private fun HomeScreen(
             }
         }
         Spacer(Modifier.height(10.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = onAdd, enabled = rules.size < 10, modifier = Modifier.weight(1f)) { Icon(Icons.Default.Add, null); Spacer(Modifier.size(6.dp)); Text(if (rules.size < 10) "添加规则" else "已达上限") }
-            OutlinedButton(onClick = onSettings, modifier = Modifier.weight(0.55f)) { Icon(Icons.Default.Settings, null); Spacer(Modifier.size(4.dp)); Text("设置") }
+        Button(onClick = onAdd, enabled = rules.size < 10, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Default.Add, null)
+            Spacer(Modifier.size(6.dp))
+            Text(if (rules.size < 10) "添加规则" else "已达上限")
         }
-        OutlinedButton(onClick = onNotificationManagement, modifier = Modifier.fillMaxWidth()) { Text("通知筛选与收纳") }
         if (!smsGranted || !notificationGranted) {
             TextButton(onClick = { launcher.launch(buildList { add(Manifest.permission.RECEIVE_SMS); add(Manifest.permission.READ_PHONE_STATE); if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS) }.toTypedArray()) }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("申请基础权限") }
         }
@@ -357,12 +415,10 @@ private fun HomeScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsScreen(
     vibrationEnabled: Boolean,
     ringtoneUri: String?,
-    onBack: () -> Unit,
     onVibrationChanged: (Boolean) -> Unit,
     onRingtoneSelected: (Uri?) -> Unit,
     onPermission: () -> Unit,
@@ -375,31 +431,30 @@ private fun SettingsScreen(
     val currentName = remember(ringtoneUri) {
         runCatching { ringtoneUri?.let { RingtoneManager.getRingtone(context, Uri.parse(it))?.getTitle(context) } }.getOrNull() ?: "系统默认闹钟铃声"
     }
-    Scaffold(topBar = { TopAppBar(title = { Text("设置") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "返回") } }) }) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize().background(MaterialTheme.colorScheme.background).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("提醒铃声", fontWeight = FontWeight.SemiBold)
-                    Text(currentName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { ringtoneLauncher.launch(Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply { putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM); putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "选择提醒铃声"); putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, ringtoneUri?.let(Uri::parse)) }) }) { Text("选择") }
-                        OutlinedButton(onClick = { ringtoneUri?.let { RingtoneManager.getRingtone(context, Uri.parse(it))?.play() } ?: RingtoneManager.getRingtone(context, Settings.System.DEFAULT_ALARM_ALERT_URI)?.play() }) { Text("试听") }
-                    }
+    @Suppress("DEPRECATION")
+    val versionName = remember(context) { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "" }
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text("提醒铃声", fontWeight = FontWeight.SemiBold)
+                Text(currentName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { ringtoneLauncher.launch(Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply { putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM); putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "选择提醒铃声"); putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, ringtoneUri?.let(Uri::parse)) }) }) { Text("选择") }
+                    OutlinedButton(onClick = { ringtoneUri?.let { RingtoneManager.getRingtone(context, Uri.parse(it))?.play() } ?: RingtoneManager.getRingtone(context, Settings.System.DEFAULT_ALARM_ALERT_URI)?.play() }) { Text("试听") }
                 }
             }
-            Card(Modifier.fillMaxWidth()) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("震动提醒", fontWeight = FontWeight.SemiBold); Text("震动 1 秒，停止 1 秒循环", style = MaterialTheme.typography.bodySmall) }; Switch(checked = vibrationEnabled, onCheckedChange = onVibrationChanged) } }
-            Card(Modifier.fillMaxWidth().clickable(onClick = onTest)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.NotificationsActive, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.size(12.dp)); Column { Text("测试强提醒", fontWeight = FontWeight.SemiBold); Text("模拟一次报警，不需要真实短信", style = MaterialTheme.typography.bodySmall) } } }
-            Card(Modifier.fillMaxWidth().clickable(onClick = onPermission)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Text("权限检查", fontWeight = FontWeight.SemiBold); Spacer(Modifier.weight(1f)); Text("查看", color = MaterialTheme.colorScheme.primary) } }
-            HorizontalDivider()
-            Text("短信强提醒 V1.0", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        Card(Modifier.fillMaxWidth()) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("震动提醒", fontWeight = FontWeight.SemiBold); Text("震动 1 秒，停止 1 秒循环", style = MaterialTheme.typography.bodySmall) }; Switch(checked = vibrationEnabled, onCheckedChange = onVibrationChanged) } }
+        Card(Modifier.fillMaxWidth().clickable(onClick = onTest)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.NotificationsActive, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.size(12.dp)); Column { Text("测试强提醒", fontWeight = FontWeight.SemiBold); Text("模拟一次报警，不需要真实短信", style = MaterialTheme.typography.bodySmall) } } }
+        Card(Modifier.fillMaxWidth().clickable(onClick = onPermission)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Text("权限检查", fontWeight = FontWeight.SemiBold); Spacer(Modifier.weight(1f)); Text("查看", color = MaterialTheme.colorScheme.primary) } }
+        HorizontalDivider()
+        Text("短信强提醒 V$versionName", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PermissionScreen(onBack: () -> Unit, permissionRevision: Int, onPermissionResult: () -> Unit) {
+private fun PermissionScreen(permissionRevision: Int, onPermissionResult: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val packageName = context.packageName
     val sms = remember(permissionRevision) { ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED }
@@ -410,19 +465,17 @@ private fun PermissionScreen(onBack: () -> Unit, permissionRevision: Int, onPerm
     val power = remember(permissionRevision) { context.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(packageName) == true }
     val manufacturer = DeviceSettingsHelper.manufacturerName()
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { onPermissionResult() }
-    Scaffold(topBar = { TopAppBar(title = { Text("权限检查") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "返回") } }) }) { padding ->
-        LazyColumn(Modifier.padding(padding).fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            item { Text("为了尽可能可靠地提醒，请检查以下项目。vivo 的菜单名称可能随 OriginOS 版本变化。", style = MaterialTheme.typography.bodyMedium) }
-            item { PermissionRow("SMS 接收权限", sms, onClick = { launcher.launch(arrayOf(Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_PHONE_STATE)) }) }
-            item { PermissionRow("通知权限", notifications, onClick = { if (Build.VERSION.SDK_INT >= 33) launcher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS)) }) }
-            item { PermissionRow("通知使用权", notificationListener, onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) }
-            item { PermissionRow("通话状态权限", ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED, onClick = { launcher.launch(arrayOf(Manifest.permission.READ_PHONE_STATE)) }) }
-            item { PermissionRow("全屏提醒权限", fullScreen, onClick = { if (Build.VERSION.SDK_INT >= 34) context.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:$packageName"))) }) }
-            item { PermissionRow("后台弹窗权限", overlay, onClick = { context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) }) }
-            item { PermissionRow("电池优化", power, onClick = { runCatching { context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))) } }) }
-            item { PermissionRow("后台自启动 / 后台运行", false, statusText = "点击前往 ${manufacturer} 系统设置确认", onClick = { DeviceSettingsHelper.openAutoStartSettings(context) }) }
-            item { Text("建议允许后台弹窗、自启动，并将电池后台策略设为不限制。报警结束后，应用会恢复原来的闹钟音量。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        }
+    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item { Text("为了尽可能可靠地提醒，请检查以下项目。vivo 的菜单名称可能随 OriginOS 版本变化。", style = MaterialTheme.typography.bodyMedium) }
+        item { PermissionRow("SMS 接收权限", sms, onClick = { launcher.launch(arrayOf(Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_PHONE_STATE)) }) }
+        item { PermissionRow("通知权限", notifications, onClick = { if (Build.VERSION.SDK_INT >= 33) launcher.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS)) }) }
+        item { PermissionRow("通知使用权", notificationListener, onClick = { context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) }
+        item { PermissionRow("通话状态权限", ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED, onClick = { launcher.launch(arrayOf(Manifest.permission.READ_PHONE_STATE)) }) }
+        item { PermissionRow("全屏提醒权限", fullScreen, onClick = { if (Build.VERSION.SDK_INT >= 34) context.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:$packageName"))) }) }
+        item { PermissionRow("后台弹窗权限", overlay, onClick = { context.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))) }) }
+        item { PermissionRow("电池优化", power, onClick = { runCatching { context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))) } }) }
+        item { PermissionRow("后台自启动 / 后台运行", false, statusText = "点击前往 ${manufacturer} 系统设置确认", onClick = { DeviceSettingsHelper.openAutoStartSettings(context) }) }
+        item { Text("建议允许后台弹窗、自启动，并将电池后台策略设为不限制。报警结束后，应用会恢复原来的闹钟音量。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
 }
 
@@ -434,11 +487,11 @@ private fun PermissionRow(label: String, granted: Boolean, statusText: String? =
                 Text(label, fontWeight = FontWeight.SemiBold)
                 Text(
                     statusText ?: if (granted) "正常" else "需要设置",
-                    color = if (granted) Color(0xFF1B8A4A) else if (statusText != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    color = if (granted) MaterialTheme.colorScheme.tertiary else if (statusText != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall
                 )
             }
-            Text(if (granted) "✓" else "→", color = if (granted) Color(0xFF1B8A4A) else MaterialTheme.colorScheme.primary, fontSize = 20.sp)
+            Text(if (granted) "✓" else "→", color = if (granted) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary, fontSize = 20.sp)
         }
     }
 }
@@ -484,7 +537,7 @@ private fun RuleEditorDialog(
                         val result = RuleEngine.test(initial.copy(keywords = keywords), testBody)
                         testResult = if (result.matched) "✓ 会触发强提醒（命中 ${keywords.size}/${keywords.size} 个关键词）" else "✗ 不会触发：未匹配 ${result.missingKeywords.joinToString("、")}"
                     }, enabled = testBody.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text("测试规则") }
-                    testResult?.let { Text(it, color = if (it.startsWith("✓")) Color(0xFF1B8A4A) else MaterialTheme.colorScheme.error) }
+                    testResult?.let { Text(it, color = if (it.startsWith("✓")) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.error) }
                 } else {
                     OutlinedTextField(value = phone, onValueChange = { phone = it; error = null }, label = { Text("手机号码") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone), singleLine = true, modifier = Modifier.fillMaxWidth())
                     Text("支持 +86、86、空格和短横线格式，保存时会精确匹配。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
