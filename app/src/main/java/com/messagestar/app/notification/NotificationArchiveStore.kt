@@ -14,6 +14,7 @@ class NotificationArchiveStore(context: Context) : SQLiteOpenHelper(context, "no
         private val generation = AtomicLong()
         val changes = revision.asStateFlow()
         private const val RETENTION_MS = 30L * 24 * 60 * 60 * 1000
+        private const val MAX_ARCHIVED = 1000
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -50,9 +51,21 @@ class NotificationArchiveStore(context: Context) : SQLiteOpenHelper(context, "no
             put("reason", entry.reason)
             put("posted_at", entry.postedAt)
         }
-        writableDatabase.insertWithOnConflict("archived_notifications", null, values, SQLiteDatabase.CONFLICT_REPLACE)
-        writableDatabase.delete("archived_notifications", "posted_at < ?", arrayOf((System.currentTimeMillis() - RETENTION_MS).toString()))
-        writableDatabase.execSQL("DELETE FROM archived_notifications WHERE notification_key NOT IN (SELECT notification_key FROM archived_notifications ORDER BY posted_at DESC LIMIT 1000)")
+        val db = writableDatabase
+        db.beginTransactionNonExclusive()
+        try {
+            db.insertWithOnConflict("archived_notifications", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            db.delete("archived_notifications", "posted_at < ?", arrayOf((System.currentTimeMillis() - RETENTION_MS).toString()))
+            // Remove only overflow rows without materializing a set of retained keys.
+            db.execSQL(
+                "DELETE FROM archived_notifications WHERE notification_key IN " +
+                    "(SELECT notification_key FROM archived_notifications " +
+                    "ORDER BY posted_at DESC, notification_key DESC LIMIT -1 OFFSET $MAX_ARCHIVED)"
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
         revision.value = generation.incrementAndGet()
     }
 
