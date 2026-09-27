@@ -20,7 +20,7 @@ val hasReleaseSigning = releaseStoreFile?.isFile == true &&
         !releaseSigningProperties.getProperty(it).isNullOrBlank()
     }
 val updateManifestUrl = providers.gradleProperty("messageStarUpdateManifestUrl")
-    .orElse("https://raw.githubusercontent.com/zcohlaz/message-star-updates/main/update.json")
+    .orElse("https://zcohlaz.github.io/message-star-updates/update.json")
     .get()
 
 android {
@@ -31,8 +31,8 @@ android {
         applicationId = "com.messagestar.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 4
+        versionName = "1.2.1"
         buildConfigField("String", "UPDATE_MANIFEST_URL", "\"${updateManifestUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 
