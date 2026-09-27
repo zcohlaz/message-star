@@ -19,6 +19,9 @@ val hasReleaseSigning = releaseStoreFile?.isFile == true &&
     listOf("storePassword", "keyAlias", "keyPassword").all {
         !releaseSigningProperties.getProperty(it).isNullOrBlank()
     }
+val updateManifestUrl = providers.gradleProperty("messageStarUpdateManifestUrl")
+    .orElse("https://raw.githubusercontent.com/zcohlaz/message-star-updates/main/update.json")
+    .get()
 
 android {
     namespace = "com.messagestar.app"
@@ -28,8 +31,9 @@ android {
         applicationId = "com.messagestar.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
+        buildConfigField("String", "UPDATE_MANIFEST_URL", "\"${updateManifestUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 
     signingConfigs {
@@ -64,7 +68,7 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    buildFeatures { compose = true; buildConfig = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.15" }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }

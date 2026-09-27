@@ -13,6 +13,22 @@
 - 重复命中时聚合计数，最长提醒 5 分钟，关闭后冷却 60 秒
 - 系统铃声选择、试听、规则测试和权限检查
 - 通知筛选与收纳：按 APP 与标题/正文关键词保留、轻提醒或强提醒重要通知；其余记录到本地收纳箱
+- 应用内检查更新：显示版本说明、下载并校验正式 APK，再交由系统安装器确认覆盖安装
+
+## 应用内更新通道
+
+当前源码仓库是私有的，不能把其 GitHub Releases API 或资产直链直接放进面向普通用户的 App；也不要把 GitHub Token 写进 APK。更新清单和已签名的正式 APK 应单独放在可匿名访问的公开 HTTPS 地址，源码与签名密钥保持私有。
+
+默认更新地址是公开仓库中的 [`update.json`](https://github.com/zcohlaz/message-star-updates/blob/main/update.json)；测试时可在构建命令中用 `-PmessageStarUpdateManifestUrl=https://.../update.json` 覆盖。若显式配置为空，“设置 → 检查更新”会显示“更新通道尚未配置”，不会联网。App 启动时最多每 24 小时自动检查一次；用户也可在设置页手动检查。强提醒进行中不检查、下载或发起安装。
+
+`update.json` 是 UTF-8 JSON，字段为 `packageName`、`versionCode`、`versionName`、`notes`、`apkUrl`、`sizeBytes`、`sha256`。发布步骤：
+
+1. 将 `app/build.gradle.kts` 中的 `versionCode` 提高，并用原正式密钥构建单个 APK。不要用 Debug 签名或新密钥覆盖旧版。
+2. 先将 APK 上传至公开 HTTPS 下载地址，确认匿名用户能直接下载。APK 不要与源码、密钥或开发文档打包在一起。
+3. 用 `scripts/New-UpdateManifest.ps1` 根据该 APK 生成清单，并核对版本号和下载 URL；最后上传 `update.json`。清单应在 APK 可下载之后发布。
+4. 在旧版真机上验证检查、下载、未知来源授权和系统安装确认；安装后确认规则、通知收纳及设置仍在。Android 不允许普通 App 静默安装，用户必须在系统界面确认。
+
+App 下载后校验文件大小、SHA-256、包名、更高的版本号和与当前安装一致的签名。若计划发布到 Google Play，需要使用商店内更新机制并移除当前站外安装流程。
 
 ## 通知筛选与收纳
 
