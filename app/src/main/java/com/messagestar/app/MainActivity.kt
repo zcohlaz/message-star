@@ -2,6 +2,7 @@ package com.messagestar.app
 
 import android.Manifest
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.RingtoneManager
@@ -29,6 +30,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -62,6 +65,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -97,10 +101,15 @@ import com.messagestar.app.permissions.DeviceSettingsHelper
 import com.messagestar.app.notification.NotificationManagementScreen
 import com.messagestar.app.rules.RuleEngine
 import com.messagestar.app.ui.MessageStarTheme
+import com.messagestar.app.update.UpdateManager
+import com.messagestar.app.update.UpdateManifest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import java.io.File
 
 private object AppScreen {
     const val HOME = "home"
@@ -150,6 +159,60 @@ private fun MessageStarApp(repository: SettingsRepository, activity: MainActivit
     var editingRuleJson by rememberSaveable { mutableStateOf<String?>(null) }
     var showTypePicker by rememberSaveable { mutableStateOf(false) }
     var pendingDeleteJson by rememberSaveable { mutableStateOf<String?>(null) }
+    val updateManager = remember(activity) { UpdateManager(activity.applicationContext) }
+    var availableUpdate by remember { mutableStateOf<UpdateManifest?>(null) }
+    var showUpdate by remember { mutableStateOf(false) }
+    var updateStatus by remember { mutableStateOf("") }
+    var checkingUpdate by remember { mutableStateOf(false) }
+    var downloadingUpdate by remember { mutableStateOf(false) }
+    var downloadJob by remember { mutableStateOf<Job?>(null) }
+    var updateProgress by remember { mutableIntStateOf(0) }
+    var pendingInstall by remember { mutableStateOf<Pair<File, UpdateManifest>?>(null) }
+    val installPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        pendingInstall?.let { (file, manifest) ->
+            pendingInstall = null
+            runCatching { updateManager.install(file, manifest) }
+                .onFailure { updateStatus = it.message ?: "无法启动安装"; showUpdate = true }
+        }
+    }
+    val startInstall: (File, UpdateManifest) -> Unit = { file, manifest ->
+        if (updateManager.canInstallPackages()) {
+            runCatching { updateManager.install(file, manifest) }
+                .onFailure { updateStatus = it.message ?: "无法启动安装"; showUpdate = true }
+        } else {
+            pendingInstall = file to manifest
+            installPermissionLauncher.launch(updateManager.installationPermissionIntent())
+        }
+    }
+    val checkForUpdate: (Boolean) -> Unit = { manual ->
+        if (!checkingUpdate && !downloadingUpdate) {
+            scope.launch {
+                checkingUpdate = true
+                if (manual) updateStatus = "正在检查更新…"
+                activity.getSharedPreferences("update_check", Context.MODE_PRIVATE).edit()
+                    .putLong("last_attempt", System.currentTimeMillis()).apply()
+                try {
+                    val result = updateManager.check()
+                    availableUpdate = result
+                    updateStatus = if (result == null) "已经是最新版本" else "发现新版本 ${result.versionName}"
+                    if (result != null && !updateManager.isAlerting()) showUpdate = true
+                } catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    if (manual) updateStatus = error.message ?: "检查更新失败"
+                } finally {
+                    checkingUpdate = false
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(updateManager) {
+        val lastCheck = activity.getSharedPreferences("update_check", Context.MODE_PRIVATE).getLong("last_attempt", 0L)
+        val now = System.currentTimeMillis()
+        if (updateManager.isConfigured && !updateManager.isAlerting() && (now - lastCheck !in 0..86_400_000L)) {
+            checkForUpdate(false)
+        }
+    }
 
     DisposableEffect(activity) {
         val observer = LifecycleEventObserver { _, event ->
@@ -244,7 +307,11 @@ private fun MessageStarApp(repository: SettingsRepository, activity: MainActivit
                         scope.launch { snackbarHostState.showSnackbar("铃声已更新") }
                     },
                     onPermission = { navController.navigate(AppScreen.PERMISSIONS) },
-                    onTest = { AlertCoordinator.trigger(activity, "测试短信", testMode = true) }
+                    onTest = { AlertCoordinator.trigger(activity, "测试短信", testMode = true) },
+                    updateConfigured = updateManager.isConfigured,
+                    updateStatus = updateStatus,
+                    checkingUpdate = checkingUpdate,
+                    onCheckUpdate = { checkForUpdate(true) }
                 )
             }
             composable(AppScreen.NOTIFICATIONS) {
@@ -320,6 +387,53 @@ private fun MessageStarApp(repository: SettingsRepository, activity: MainActivit
                         }
                     }
                 }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            }
+        )
+    }
+
+    val update = availableUpdate
+    if (showUpdate && update != null) {
+        AlertDialog(
+            onDismissRequest = { if (!downloadingUpdate) showUpdate = false },
+            title = { Text("发现新版本 ${update.versionName}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(update.notes.ifBlank { "修复问题并改进体验" })
+                    Text("下载大小约 ${update.sizeBytes / 1024 / 1024} MB。安装时需在系统界面确认；应用数据会保留。", style = MaterialTheme.typography.bodySmall)
+                    if (downloadingUpdate) LinearProgressIndicator(progress = { updateProgress / 100f }, modifier = Modifier.fillMaxWidth())
+                    if (updateStatus.isNotBlank() && !updateStatus.startsWith("发现新版本") && updateStatus != "正在下载…") {
+                        Text(updateStatus, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    if (downloadingUpdate) downloadJob?.cancel() else showUpdate = false
+                }) { Text(if (downloadingUpdate) "取消下载" else "稍后") }
+            },
+            confirmButton = {
+                TextButton(enabled = !downloadingUpdate, onClick = {
+                    downloadJob = scope.launch {
+                        downloadingUpdate = true
+                        updateProgress = 0
+                        updateStatus = "正在下载…"
+                        try {
+                            val file = updateManager.download(update) { updateProgress = it }
+                            updateStatus = "下载完成，等待系统安装确认"
+                            showUpdate = false
+                            startInstall(file, update)
+                        } catch (error: CancellationException) {
+                            updateStatus = "已取消下载"
+                            showUpdate = false
+                            throw error
+                        } catch (error: Exception) {
+                            updateStatus = error.message ?: "下载失败"
+                        } finally {
+                            downloadingUpdate = false
+                            downloadJob = null
+                        }
+                    }
+                }) { Text(if (downloadingUpdate) "下载中 $updateProgress%" else "下载并安装") }
             }
         )
     }
@@ -422,7 +536,11 @@ private fun SettingsScreen(
     onVibrationChanged: (Boolean) -> Unit,
     onRingtoneSelected: (Uri?) -> Unit,
     onPermission: () -> Unit,
-    onTest: () -> Unit
+    onTest: () -> Unit,
+    updateConfigured: Boolean,
+    updateStatus: String,
+    checkingUpdate: Boolean,
+    onCheckUpdate: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val ringtoneLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -433,7 +551,7 @@ private fun SettingsScreen(
     }
     @Suppress("DEPRECATION")
     val versionName = remember(context) { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "" }
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
                 Text("提醒铃声", fontWeight = FontWeight.SemiBold)
@@ -448,6 +566,15 @@ private fun SettingsScreen(
         Card(Modifier.fillMaxWidth()) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("震动提醒", fontWeight = FontWeight.SemiBold); Text("震动 1 秒，停止 1 秒循环", style = MaterialTheme.typography.bodySmall) }; Switch(checked = vibrationEnabled, onCheckedChange = onVibrationChanged) } }
         Card(Modifier.fillMaxWidth().clickable(onClick = onTest)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.NotificationsActive, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.size(12.dp)); Column { Text("测试强提醒", fontWeight = FontWeight.SemiBold); Text("模拟一次报警，不需要真实短信", style = MaterialTheme.typography.bodySmall) } } }
         Card(Modifier.fillMaxWidth().clickable(onClick = onPermission)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Text("权限检查", fontWeight = FontWeight.SemiBold); Spacer(Modifier.weight(1f)); Text("查看", color = MaterialTheme.colorScheme.primary) } }
+        Card(Modifier.fillMaxWidth().clickable(enabled = updateConfigured && !checkingUpdate, onClick = onCheckUpdate)) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("检查更新", fontWeight = FontWeight.SemiBold)
+                    Text(if (!updateConfigured) "更新通道尚未配置" else updateStatus.ifBlank { "检查是否有新版本" }, style = MaterialTheme.typography.bodySmall)
+                }
+                Text("→", color = MaterialTheme.colorScheme.primary)
+            }
+        }
         HorizontalDivider()
         Text("短信强提醒 V$versionName", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
