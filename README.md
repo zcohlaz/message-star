@@ -19,7 +19,7 @@
 
 当前源码仓库是私有的，不能把其 GitHub Releases API 或资产直链直接放进面向普通用户的 App；也不要把 GitHub Token 写进 APK。更新清单和已签名的正式 APK 应单独放在可匿名访问的公开 HTTPS 地址，源码与签名密钥保持私有。
 
-默认更新地址是公开仓库中的 [`update.json`](https://github.com/zcohlaz/message-star-updates/blob/main/update.json)；测试时可在构建命令中用 `-PmessageStarUpdateManifestUrl=https://.../update.json` 覆盖。若显式配置为空，“设置 → 检查更新”会显示“更新通道尚未配置”，不会联网。App 启动时最多每 24 小时自动检查一次；用户也可在设置页手动检查。强提醒进行中不检查、下载或发起安装。
+默认更新地址是公开仓库经 GitHub Pages 提供的 [`update.json`](https://zcohlaz.github.io/message-star-updates/update.json)；测试时可在构建命令中用 `-PmessageStarUpdateManifestUrl=https://.../update.json` 覆盖。若显式配置为空，“设置 → 检查更新”会显示“更新通道尚未配置”，不会联网。App 启动时最多每 24 小时自动检查一次；用户也可在设置页手动检查。强提醒进行中不检查、下载或发起安装。
 
 `update.json` 是 UTF-8 JSON，字段为 `packageName`、`versionCode`、`versionName`、`notes`、`apkUrl`、`sizeBytes`、`sha256`。发布步骤：
 
